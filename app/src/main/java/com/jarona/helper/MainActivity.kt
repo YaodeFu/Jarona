@@ -3,8 +3,10 @@ package com.jarona.helper
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,7 +28,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -33,6 +38,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -67,6 +74,15 @@ import androidx.compose.ui.unit.sp
 
 private enum class BuffType { Strength, Agility }
 private data class Buff(val type: BuffType, val amount: Int, val rounds: Int? = null)
+private data class OperationRecord(
+    val round: Int,
+    val key: String,
+    val text: String,
+    val unit: String? = null,
+    val count: Int = 1
+) {
+    fun displayText(): String = unit?.let { "$text $count $it" } ?: text
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -104,10 +120,22 @@ private fun BoardGameContent() {
     var intimidation by remember { mutableStateOf(false) }
     val infiniteBuffs = remember { mutableStateListOf<Buff>() }
     val timedBuffs = remember { mutableStateListOf<Buff>() }
+    val operationRecords = remember { mutableStateListOf<OperationRecord>() }
     var dialogType by remember { mutableStateOf<BuffType?>(null) }
     var removeMode by remember { mutableStateOf(false) }
     var retainDialog by remember { mutableStateOf(false) }
     var hpLossLimitDialog by remember { mutableStateOf(false) }
+    var overflowMenuExpanded by remember { mutableStateOf(false) }
+    var showRecords by remember { mutableStateOf(false) }
+
+    fun recordOperation(key: String, text: String, unit: String? = null, count: Int = 1) {
+        val previous = operationRecords.lastOrNull()
+        if (previous != null && previous.round == round && previous.key == key && previous.text == text && previous.unit == unit) {
+            operationRecords[operationRecords.lastIndex] = previous.copy(count = previous.count + count)
+        } else {
+            operationRecords.add(OperationRecord(round, key, text, unit, count))
+        }
+    }
 
     fun loseHp(amount: Int = 1) {
         // 限伤仅用于提示：即使达到上限，仍允许手动继续调整生命值。
@@ -117,37 +145,236 @@ private fun BoardGameContent() {
         }
     }
 
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("Jarona", fontWeight = FontWeight.Bold) }) },
-        bottomBar = {
-            Surface(shadowElevation = 8.dp) {
-                Button(
-                    onClick = {
-                        if (retainAllBlockThisRound) {
-                            retainAllBlockThisRound = false
-                        } else {
-                            // 保留格挡只会在回合结束时减少格挡，绝不会补足格挡。
-                            block = minOf(block, retainedBlock)
+    // 记录页拦截系统返回手势/按键，避免 Activity 被直接结束而看起来像闪退。
+    BackHandler(enabled = showRecords) { showRecords = false }
+
+    if (showRecords) {
+        RecordScreen(records = operationRecords, onBack = { showRecords = false })
+    } else {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Jarona", fontWeight = FontWeight.Bold) },
+                    actions = {
+                        Box {
+                            IconButton(onClick = { overflowMenuExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "更多选项")
+                            }
+                            DropdownMenu(
+                                expanded = overflowMenuExpanded,
+                                onDismissRequest = { overflowMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("记录") },
+                                    onClick = {
+                                        overflowMenuExpanded = false
+                                        showRecords = true
+                                    }
+                                )
+                            }
                         }
-                        hpLostThisRound = 0
-                        val nextHasFirstPlayer = !hasFirstPlayer
-                        val shifted = timedBuffs.mapNotNull { buff ->
-                            val remainingRounds = (buff.rounds ?: 1) - 1
-                            if (remainingRounds > 0) buff.copy(rounds = remainingRounds) else null
-                        }
-                        timedBuffs.clear()
-                        timedBuffs.addAll(shifted)
-                        hasFirstPlayer = nextHasFirstPlayer
-                        if (intimidation && nextHasFirstPlayer) {
-                            timedBuffs.add(Buff(BuffType.Strength, 1, 1))
-                            timedBuffs.add(Buff(BuffType.Agility, 1, 1))
-                        }
-                        round++
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(16.dp).height(52.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) { Text("每轮结束") }
+                    }
+                )
+            },
+            bottomBar = {
+                Surface(shadowElevation = 8.dp) {
+                    Button(
+                        onClick = {
+                            recordOperation("roundEnd", "结束本轮")
+                            if (retainAllBlockThisRound) {
+                                retainAllBlockThisRound = false
+                            } else {
+                                // 保留格挡只会在回合结束时减少格挡，绝不会补足格挡。
+                                block = minOf(block, retainedBlock)
+                            }
+                            hpLostThisRound = 0
+                            val nextHasFirstPlayer = !hasFirstPlayer
+                            val shifted = timedBuffs.mapNotNull { buff ->
+                                val remainingRounds = (buff.rounds ?: 1) - 1
+                                if (remainingRounds > 0) buff.copy(rounds = remainingRounds) else null
+                            }
+                            timedBuffs.clear()
+                            timedBuffs.addAll(shifted)
+                            hasFirstPlayer = nextHasFirstPlayer
+                            round++
+                            if (intimidation && hasFirstPlayer) {
+                                timedBuffs.add(Buff(BuffType.Strength, 1, 1))
+                                timedBuffs.add(Buff(BuffType.Agility, 1, 1))
+                                recordOperation("intimidationStrength", "威慑获得", "点力量")
+                                recordOperation("intimidationAgility", "威慑获得", "点敏捷")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(16.dp).height(52.dp),
+                        shape = RoundedCornerShape(16.dp)
+                    ) { Text("每轮结束") }
+                }
             }
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(padding)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("第 $round 轮", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                FirstPlayerMarker(
+                    hasFirstPlayer = hasFirstPlayer,
+                    intimidation = intimidation,
+                    onIntimidationChange = { enabled ->
+                        if (intimidation != enabled) {
+                            intimidation = enabled
+                            recordOperation(
+                                key = if (enabled) "intimidationOn" else "intimidationOff",
+                                text = if (enabled) "开启威慑" else "关闭威慑"
+                            )
+                        }
+                    },
+                    onToggle = {
+                        hasFirstPlayer = !hasFirstPlayer
+                        recordOperation(
+                            key = if (hasFirstPlayer) "firstPlayerOn" else "firstPlayerOff",
+                            text = if (hasFirstPlayer) "获得先手标记" else "移除先手标记"
+                        )
+                    }
+                )
+                val hpLossLimitReached = hpLossLimit > 0 && hpLostThisRound >= hpLossLimit
+                StatusCard(
+                    title = if (hpLossLimitReached) "生命值（已达到限伤${hpLossLimit}点）" else "生命值",
+                    value = hp,
+                    color = MaterialTheme.colorScheme.error
+                ) {
+                    ActionButton("生命值+1") {
+                        hp++
+                        recordOperation("hpGain", "获得", "点生命值")
+                    }
+                    ActionButton("生命值-1") {
+                        loseHp()
+                        recordOperation("hpLoss", "失去", "点生命值")
+                    }
+                    ActionButton("受到伤害") {
+                        if (block > 0) block-- else loseHp()
+                        recordOperation("damage", "受到", "点伤害")
+                    }
+                    ActionButton("限伤：$hpLossLimit") { hpLossLimitDialog = true }
+                }
+                StatusCard("格挡", block, MaterialTheme.colorScheme.secondaryContainer) {
+                    ActionButton("格挡+1") {
+                        block++
+                        recordOperation("blockGain", "获得", "点格挡")
+                    }
+                    ActionButton("格挡-1") {
+                        if (block > 0) {
+                            block--
+                            recordOperation("blockLoss", "失去", "点格挡")
+                        }
+                    }
+                    ActionButton("清空") {
+                        if (block > 0) {
+                            block = 0
+                            recordOperation("blockClear", "清空格挡")
+                        }
+                    }
+                    ActionButton("保留：$retainedBlock") { retainDialog = true }
+                }
+                BuffCard(
+                    infiniteBuffs = infiniteBuffs,
+                    timedBuffs = timedBuffs,
+                    removeMode = removeMode,
+                    onRemoveModeChange = { removeMode = it },
+                    onAdd = { dialogType = it },
+                    onRemove = { buff, timed ->
+                        val target = if (timed) timedBuffs else infiniteBuffs
+                        val index = target.indexOfFirst {
+                            it.type == buff.type && it.rounds == buff.rounds
+                        }
+                        if (index >= 0) {
+                            val current = target[index]
+                            val step = if (current.amount < 0) 1 else -1
+                            val remaining = current.amount + step
+                            if (remaining == 0) target.removeAt(index)
+                            else target[index] = current.copy(amount = remaining)
+                            recordOperation(
+                                key = "removeBuff:${buff.type}",
+                                text = "移除",
+                                unit = "点${if (buff.type == BuffType.Strength) "力量" else "敏捷"}"
+                            )
+                        }
+                    }
+                )
+            }
+        }
+
+        dialogType?.let { type ->
+            BuffDialog(type = type, onDismiss = { dialogType = null }) { amount, rounds, infinite ->
+                if (amount != 0) {
+                    val normalizedRounds = rounds.coerceAtLeast(1)
+                    val newBuff = Buff(type, amount, if (infinite) null else normalizedRounds)
+                    if (infinite) infiniteBuffs.add(newBuff) else timedBuffs.add(newBuff)
+                    val buffName = if (type == BuffType.Strength) "力量" else "敏捷"
+                    val duration = if (infinite) "永久Buff" else "${normalizedRounds}轮"
+                    recordOperation(
+                        key = "addBuff:$type:$duration",
+                        text = "获得",
+                        unit = "点$buffName（$duration）",
+                        count = amount
+                    )
+                }
+                dialogType = null
+            }
+        }
+        if (retainDialog) {
+            RetainedBlockDialog(
+                value = retainedBlock,
+                retainAllBlockThisRound = retainAllBlockThisRound,
+                onRetainAllBlockChange = { enabled ->
+                    if (retainAllBlockThisRound != enabled) {
+                        retainAllBlockThisRound = enabled
+                        recordOperation(
+                            key = if (enabled) "retainAllOn" else "retainAllOff",
+                            text = if (enabled) "本轮保留全部格挡" else "取消本轮保留全部格挡"
+                        )
+                    }
+                },
+                onDismiss = { retainDialog = false },
+                onConfirm = { value ->
+                    if (retainedBlock != value) {
+                        retainedBlock = value
+                        recordOperation("retainBlock", "设置每轮保留格挡为$value 点")
+                    }
+                }
+            )
+        }
+        if (hpLossLimitDialog) {
+            LimitHpLossDialog(
+                value = hpLossLimit,
+                onDismiss = { hpLossLimitDialog = false },
+                onConfirm = { value ->
+                    if (hpLossLimit != value) {
+                        hpLossLimit = value
+                        recordOperation("hpLossLimit", "设置限伤为$value 点")
+                    }
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RecordScreen(records: List<OperationRecord>, onBack: () -> Unit) {
+    val timelineColor = Color(0xFFD1D5DB)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("记录", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
         }
     ) { padding ->
         Column(
@@ -155,80 +382,53 @@ private fun BoardGameContent() {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(padding)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            Text("第 $round 轮", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-            FirstPlayerMarker(
-                hasFirstPlayer = hasFirstPlayer,
-                intimidation = intimidation,
-                onIntimidationChange = { intimidation = it },
-                onToggle = { hasFirstPlayer = !hasFirstPlayer }
-            )
-            val hpLossLimitReached = hpLossLimit > 0 && hpLostThisRound >= hpLossLimit
-            StatusCard(
-                title = if (hpLossLimitReached) "生命值（已达到限伤${hpLossLimit}点）" else "生命值",
-                value = hp,
-                color = MaterialTheme.colorScheme.error
-            ) {
-                ActionButton("生命值+1") { hp++ }
-                ActionButton("生命值-1") { loseHp() }
-                ActionButton("受到伤害") { if (block > 0) block-- else loseHp() }
-                ActionButton("限伤：$hpLossLimit") { hpLossLimitDialog = true }
-            }
-            StatusCard("格挡", block, MaterialTheme.colorScheme.secondaryContainer) {
-                ActionButton("格挡+1") { block++ }
-                ActionButton("格挡-1") { if (block > 0) block-- }
-                ActionButton("清空") { block = 0 }
-                ActionButton("保留：$retainedBlock") { retainDialog = true }
-            }
-            BuffCard(
-                infiniteBuffs = infiniteBuffs,
-                timedBuffs = timedBuffs,
-                removeMode = removeMode,
-                onRemoveModeChange = { removeMode = it },
-                onAdd = { dialogType = it },
-                onRemove = { buff, timed ->
-                    val target = if (timed) timedBuffs else infiniteBuffs
-                    val index = target.indexOfFirst {
-                        it.type == buff.type && it.rounds == buff.rounds
-                    }
-                    if (index >= 0) {
-                        val current = target[index]
-                        val step = if (current.amount < 0) 1 else -1
-                        val remaining = current.amount + step
-                        if (remaining == 0) target.removeAt(index)
-                        else target[index] = current.copy(amount = remaining)
+            if (records.isEmpty()) {
+                Text("暂无记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                val groupedRecords = records.groupBy { it.round }.toList()
+                groupedRecords.forEachIndexed { index, (recordRound, roundRecords) ->
+                    Row(Modifier.fillMaxWidth()) {
+                        Box(
+                            modifier = Modifier
+                                .width(88.dp)
+                                .fillMaxHeight()
+                        ) {
+                            Text(
+                                "第 $recordRound 轮",
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(top = 2.dp),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            if (index < groupedRecords.lastIndex) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(top = 38.dp, end = 8.dp)
+                                        .width(4.dp)
+                                        .fillMaxHeight()
+                                        .background(timelineColor, RoundedCornerShape(2.dp))
+                                )
+                            }
+                        }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 14.dp, bottom = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            roundRecords.forEach { record ->
+                                Text(record.displayText())
+                            }
+                        }
                     }
                 }
-            )
-        }
-    }
-
-    dialogType?.let { type ->
-        BuffDialog(type = type, onDismiss = { dialogType = null }) { amount, rounds, infinite ->
-            if (amount != 0) {
-                val newBuff = Buff(type, amount, if (infinite) null else rounds.coerceAtLeast(1))
-                if (infinite) infiniteBuffs.add(newBuff) else timedBuffs.add(newBuff)
             }
-            dialogType = null
         }
-    }
-    if (retainDialog) {
-        RetainedBlockDialog(
-            value = retainedBlock,
-            retainAllBlockThisRound = retainAllBlockThisRound,
-            onRetainAllBlockChange = { retainAllBlockThisRound = it },
-            onDismiss = { retainDialog = false },
-            onConfirm = { retainedBlock = it }
-        )
-    }
-    if (hpLossLimitDialog) {
-        LimitHpLossDialog(
-            value = hpLossLimit,
-            onDismiss = { hpLossLimitDialog = false },
-            onConfirm = { hpLossLimit = it }
-        )
     }
 }
 
@@ -336,10 +536,10 @@ private fun BuffCard(
                     label = { Text(if (removeMode) "完成移除" else "移除Buff") }
                 )
             }
-            Text("无限 Buff", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text("永久Buff", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             BuffRow(infiniteBuffs, timed = false, removeMode, onRemove)
             HorizontalDivider()
-            Text("有限 Buff", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text("临时Buff", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
 
             val groupedTimed = timedBuffs.groupBy { it.rounds ?: 1 }
             val maxSlot = maxOf(3, groupedTimed.keys.maxOrNull() ?: 3)
@@ -440,7 +640,7 @@ private fun BuffDialog(type: BuffType, onDismiss: () -> Unit, onConfirm: (Int, I
                 Stepper("轮数", rounds, { rounds-- }, { rounds++ }, enabled = !infinite, allowZero = false)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = infinite, onCheckedChange = { infinite = it })
-                    Text("无限 Buff")
+                    Text("永久Buff")
                 }
             }
         },
@@ -524,4 +724,12 @@ private fun LimitHpLossDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
+
+
+
+
+
+
+
+
 
