@@ -1,10 +1,4 @@
-/gradle
-/gradle\9.0-milestone-1
-/gradle\9.1.0
-/gradle\buildOutputCleanup
-/gradle\vcs-1
-/gradle\config.properties
-/gradle\file-system.probe
-/idea
-/kotlin
+/.gradle
+/.idea
+/.kotlin
 /build
